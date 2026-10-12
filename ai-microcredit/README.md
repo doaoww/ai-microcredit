@@ -1,36 +1,172 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Кредитный кабинет
 
-## Getting Started
+Минимальный Next.js-проект: главная → вход → личный кабинет.
+PostgreSQL работает в Docker. Вход реализован самостоятельно, без NextAuth.
 
-First, run the development server:
+## Запуск
 
-```bash
+В терминале WebStorm открой папку `ai-microcredit`:
+
+```powershell
+docker compose up -d
+npm install
+npm run db:setup
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Открой **http://localhost:3000**. Если порт занят уже запущенным приложением,
+используй его или останови прежний процесс. Если меняешь порт сайта, поменяй
+`APP_ORIGIN` в `.env.local` и перезапусти сервер.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Локальный `.env.local` уже создан из настроек Compose и исключён из Git.
+Для нового компьютера скопируй `.env.example` в `.env.local` и замени пароль.
+Специальные символы пароля в DATABASE_URL нужно URL-кодировать.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `DATABASE_URL` — подключение сервера к БД; сейчас адрес 127.0.0.1:5433.
+- `APP_ORIGIN=http://localhost:3000` — точный адрес сайта для проверки Origin.
+- `ALLOW_DEMO_SEED=true` — разрешает создавать локальные тестовые аккаунты.
 
-## Learn More
+Не добавляй к этим переменным префикс NEXT_PUBLIC_: они нужны только серверу.
+За пределами localhost требуется HTTPS.
 
-To learn more about Next.js, take a look at the following resources:
+## Тестовые пользователи
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Логин | Пароль | Состояние |
+|---|---|---|
+| test1 | test1 | Нет заявки |
+| test2 | test2 | Заявка рассматривается |
+| test3 | test3 | Кредит одобрен |
+| test4 | test4 | В кредите отказано |
+| test5 | test5 | Кредит выдан |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Пароли намеренно простые по условию демонстрации. Эти аккаунты нельзя оставлять
+в публичном приложении с реальными данными. Seed запрещён при NODE_ENV=production.
 
-## Deploy on Vercel
+## Как создаются таблицы
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`npm run db:migrate` применяет SQL из `db/migrations/001_auth.sql`.
+Всё выполняется в транзакции; при ошибке изменения откатываются. Таблица
+`schema_migrations` запоминает применённые миграции. Повторный запуск безопасен.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`npm run db:seed` создаёт test1–test5 и их заявки. Пароли сначала хешируются;
+существующие пользователи и их статусы не перезаписываются.
+
+`npm run db:setup` выполняет обе команды по очереди. Данные тома Docker
+и существующие таблицы не удаляются.
+
+Таблицы:
+- `users` — логин, имя, хеш пароля, ACTIVE/BLOCKED.
+- `sessions` — хеш токена, ссылка на пользователя и срок действия.
+- `credit_applications` — заявки и их статусы, отдельно от состояния аккаунта.
+- `login_rate_limits` — ограничение частоты входа.
+- `schema_migrations` — учёт изменений схемы.
+
+Для изменения схемы в дальнейшем добавляй новую миграцию и регистрируй её в
+`db/migrate.ts`; уже применённую 001 не редактируй в надежде на повторное выполнение.
+
+В WebStorm открой Database, обнови подключение (Refresh/Synchronize),
+затем `credit_app → schemas → public → tables`. Если public не виден,
+выбери эту схему в настройках источника данных. Таблицы создаёт команда миграции,
+а вкладка Database позволяет их просматривать.
+
+Проверка пользователей через SQL-консоль WebStorm:
+
+```sql
+SELECT u.login, u.account_status, a.status
+FROM users u
+LEFT JOIN credit_applications a ON a.user_id = u.id
+ORDER BY u.login;
+```
+
+Пример ручного изменения тестовой заявки (после этого обнови кабинет):
+
+```sql
+UPDATE credit_applications
+SET status = 'APPROVED', updated_at = now()
+WHERE user_id = (SELECT id FROM users WHERE login = 'test2');
+```
+
+Допустимые статусы: PENDING, APPROVED, REJECTED, ISSUED.
+Не записывай открытый пароль в password_hash: для изменения пароля нужен
+вызов `hashPassword()`, а затем отзыв сессий пользователя.
+
+## Как работает авторизация
+
+1. `app/page.tsx` — главная с кнопкой «Войти» справа сверху.
+2. `app/login/page.tsx` — страница входа. Уже вошедший пользователь
+   перенаправляется в кабинет.
+3. `components/auth/login-form.tsx` отправляет логин и пароль POST-запросом
+   в `/api/auth/login`. Пароль не сохраняется в localStorage.
+4. `lib/auth/http.ts` проверяет Origin, тип и размер JSON, формат данных.
+5. `lib/auth/service.ts` ограничивает попытки и ищет пользователя
+   параметризованным SQL-запросом. `password.ts` проверяет пароль через scrypt.
+   В базе хранится хеш со случайной солью, а не сам пароль.
+6. При успехе генерируется случайный 256-битный токен. Его SHA-256 хранится
+   в sessions; браузер получает сам токен в HttpOnly-cookie.
+7. Cookie имеет SameSite=Lax, Path=/, срок 24 часа, Secure при HTTPS.
+   Посторонний сайт не может выполнить наши POST-операции с чужого Origin.
+8. При запросе кабинета сервер проверяет токен, срок сессии и ACTIVE у пользователя.
+   Заявка выбирается по владельцу сессии — ID из браузера не используется.
+9. `/api/auth/logout` удаляет сессию и cookie. Старый токен больше не работает.
+   Повторный вход заменяет текущую сессию этого браузера.
+10. Личные страницы и ответы авторизации не кешируются.
+
+Отказ в кредите не запрещает вход. BLOCKED запрещает доступ даже с ещё
+неистёкшей сессией. При разблокировке неотозванная сессия может снова работать;
+для окончательного завершения всех входов удали записи sessions этого пользователя.
+
+Лимиты: 5 попыток на нормализованный логин за 15 минут и общий бюджет
+200 попыток на приложение за 15 минут. Успешные входы тоже считаются.
+Счётчики живут в PostgreSQL и работают между несколькими процессами.
+Это простой лимит для прототипа; перед публичным запуском нужна настройка под
+реальную нагрузку, защита на доверенном прокси, восстановление пароля и аудит.
+
+## Где какой код
+
+```text
+app/                     страницы и HTTP-маршруты Next.js
+components/auth/         форма входа и кнопка выхода
+components/credit/       отображение статуса заявки
+lib/auth/password.ts     scrypt, соль, проверка хеша
+lib/auth/security.ts     cookie, Origin, проверка входных данных
+lib/auth/service.ts      логика входа, сессий, доступа и запросы к БД
+lib/auth/http.ts          HTTP-ответы и безопасные сообщения об ошибках
+lib/auth/server.ts       соединяет Next.js cookies и серверную логику
+lib/db/                  пул PostgreSQL и интерфейс доступа
+db/                      SQL-миграции и тестовые данные
+scripts/db.ts            команды настройки БД
+tests/                   проверки безопасности и SQL-интеграции
+```
+
+## Проверки
+
+```powershell
+npm test
+npm run lint
+npm run typecheck
+npm run build
+```
+
+Тесты используют отдельную встроенную PostgreSQL (PGlite) в памяти,
+не трогая твою Docker-базу. Проверяют изоляцию данных, сессии, блокировку,
+CSRF, лимиты, ошибки, миграции и повторный seed.
+
+Для проверки работающего сайта и пяти demo-аккаунтов:
+
+```powershell
+npm run test:smoke
+```
+
+Smoke обращается к localhost:3000, выполняет вход/выход каждым тестовым
+пользователем и проверяет статус. Такие входы учитываются в лимите попыток.
+
+## Если что-то не работает
+
+- Connection refused / ECONNREFUSED: проверь `docker compose ps` и порт 5433.
+- 28P01: пароль DATABASE_URL должен совпадать с фактическим паролем БД;
+  изменение пароля в compose.yaml не меняет пароль в уже созданном томе.
+- 42P01: не созданы таблицы — выполни `npm run db:migrate`.
+- 403 при входе: адрес в браузере должен совпадать с APP_ORIGIN
+  (localhost и 127.0.0.1 — разные origins).
+- 429: исчерпан лимит, подожди 15 минут.
+- 503: проверь доступность БД и настройки .env.local.

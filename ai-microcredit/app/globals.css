@@ -1,26 +1,22 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: white; color: black; font-family: Arial, Helvetica, sans-serif; line-height: 1.6; }
+a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.site-header { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px clamp(20px, 5vw, 64px); border-bottom: 1px solid #ddd; }
+main { width: min(100%, 900px); margin: 48px auto; padding: 0 24px; }
+main.narrow { max-width: 440px; }
+h1 { font-size: 30px; font-weight: 700; line-height: 1.25; margin-bottom: 20px; }
+h2 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+p { margin: 12px 0; }
+section { margin-top: 36px; }
+.auth-form { display: flex; flex-direction: column; gap: 10px; margin-top: 28px; }
+.auth-form label:not(:first-child) { margin-top: 12px; }
+input { width: 100%; border: 1px solid black; padding: 10px 12px; border-radius: 3px; font: inherit; }
+button { border: 1px solid black; padding: 10px 20px; background: white; color: black; border-radius: 3px; font: inherit; cursor: pointer; }
+.auth-form button { margin-top: 12px; }
+button:hover:not(:disabled) { background: #eee; }
+button:disabled { opacity: 0.6; cursor: wait; }
+:focus-visible { outline: 2px solid black; outline-offset: 4px; }
+[role="alert"] { border-left: 3px solid black; padding-left: 12px; }
